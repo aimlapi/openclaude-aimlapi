@@ -134,6 +134,7 @@ const REQUIRED_OPTION_VALUE_FLAGS = new Set([
   '--plugin-dir',
   '--prefill',
   '--provider',
+  '--provider-env-file',
   '--resume-session-at',
   '--rewind-files',
   '--session-id',
