@@ -78,7 +78,15 @@ function normalizeDiscoveredModelLookupKey(model: string): string {
 export function getDiscoveredModelApiNames(
   discovered: RouteDiscoveryResult | null,
 ): string[] | null {
-  const discoveredModels = discovered?.models
+  if (
+    !discovered ||
+    (discovered.source !== 'static' &&
+      (discovered.discoveredModelCount ?? 0) === 0)
+  ) {
+    return null
+  }
+
+  const discoveredModels = discovered.models
     .map(model => model.apiName)
     .filter(model => model.trim())
   return discoveredModels?.length ? discoveredModels : null

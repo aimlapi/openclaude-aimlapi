@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test'
 import type { RouteDiscoveryResult } from '../../integrations/discoveryService.js'
 import { fetchLocalOpenAIModelOptions, getDiscoveredModelApiNames } from './bootstrap.js'
 
-test('uses static route models from errored discovery results', () => {
+test('uses static route models when the route has no live discovery', () => {
   const discovered: RouteDiscoveryResult = {
     routeId: 'hicap',
     models: [
@@ -11,17 +11,17 @@ test('uses static route models from errored discovery results', () => {
       { id: 'blank', apiName: '   ', label: 'Blank' },
     ],
     stale: false,
-    error: { message: 'Discovery failed for route hicap', recordedAt: 1 },
-    source: 'error',
+    error: null,
+    source: 'static',
   }
 
   expect(getDiscoveredModelApiNames(discovered)).toEqual(['glm-5.2'])
 })
 
-test('falls back to raw discovery when route discovery has no usable models', () => {
+test('falls back to raw discovery when errored discovery has only static models', () => {
   const discovered: RouteDiscoveryResult = {
     routeId: 'hicap',
-    models: [],
+    models: [{ id: 'hicap-glm-5.2', apiName: 'glm-5.2', label: 'GLM 5.2' }],
     stale: false,
     error: { message: 'Discovery failed for route hicap', recordedAt: 1 },
     source: 'error',
@@ -30,7 +30,39 @@ test('falls back to raw discovery when route discovery has no usable models', ()
   expect(getDiscoveredModelApiNames(discovered)).toBeNull()
 })
 
-test('local OpenAI bootstrap canonicalizes errored discovery model options', async () => {
+test('falls back to raw discovery when live discovery returns no models', () => {
+  const discovered: RouteDiscoveryResult = {
+    routeId: 'hicap',
+    models: [{ id: 'hicap-glm-5.2', apiName: 'glm-5.2', label: 'GLM 5.2' }],
+    discoveredModelCount: 0,
+    stale: false,
+    error: null,
+    source: 'network',
+  }
+
+  expect(getDiscoveredModelApiNames(discovered)).toBeNull()
+})
+
+test('uses mapped models when live discovery returns entries', () => {
+  const discovered: RouteDiscoveryResult = {
+    routeId: 'hicap',
+    models: [
+      { id: 'hicap-glm-5.2', apiName: 'glm-5.2', label: 'GLM 5.2' },
+      { id: 'live-model', apiName: 'live/model', label: 'Live model' },
+    ],
+    discoveredModelCount: 1,
+    stale: false,
+    error: null,
+    source: 'network',
+  }
+
+  expect(getDiscoveredModelApiNames(discovered)).toEqual([
+    'glm-5.2',
+    'live/model',
+  ])
+})
+
+test('local OpenAI bootstrap falls back when route discovery has only static models', async () => {
   const envKeys = [
     'ANTHROPIC_CUSTOM_HEADERS',
     'CLAUDE_CODE_USE_OPENAI',
@@ -72,10 +104,13 @@ test('local OpenAI bootstrap canonicalizes errored discovery model options', asy
           label: 'GPT catalog id',
         },
       ],
+      discoveredModelCount: 0,
       stale: false,
       error: { message: 'Discovery failed for route hicap', recordedAt: 1 },
       source: 'error',
     }
+
+    let fallbackCalled = false
 
     const payload = await fetchLocalOpenAIModelOptions({
       discoverModelsForRoute: async () => discovered,
@@ -88,12 +123,12 @@ test('local OpenAI bootstrap canonicalizes errored discovery model options', asy
         baseUrl: 'https://api.hicap.ai/v1',
       }),
       listOpenAICompatibleModels: async () => {
-        throw new Error(
-          'raw model listing should not run when errored route discovery has models',
-        )
+        fallbackCalled = true
+        return ['zai-org/GLM-5.2', 'hicap-gpt-5.5']
       },
     })
 
+    expect(fallbackCalled).toBe(true)
     expect(payload?.additionalModelOptions).toEqual([
       {
         value: 'glm-5.2',
@@ -163,6 +198,7 @@ test('AIMLAPI discovery omits credentials on the public /models route', async ()
         return {
           routeId: 'aimlapi',
           models: [],
+          discoveredModelCount: 0,
           stale: false,
           error: null,
           source: 'network',
