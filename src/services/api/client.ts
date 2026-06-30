@@ -314,6 +314,24 @@ function applyFireworksEnvOnlyDefaults(): void {
   delete process.env.OPENAI_AUTH_HEADER_VALUE
 }
 
+function applyAimlapiEnvOnlyDefaults(): void {
+  const baseUrlOverride =
+    process.env.OPENAI_BASE_URL?.trim() ||
+    process.env.OPENAI_API_BASE?.trim() ||
+    undefined
+  const modelOverride = process.env.OPENAI_MODEL?.trim() || undefined
+
+  process.env.CLAUDE_CODE_USE_OPENAI = '1'
+  process.env.OPENAI_BASE_URL =
+    baseUrlOverride ?? getRouteDefaultBaseUrl('aimlapi')
+  process.env.OPENAI_MODEL = modelOverride ?? getRouteDefaultModel('aimlapi')
+  process.env.OPENAI_API_KEY = process.env.AIMLAPI_API_KEY
+  delete process.env.OPENAI_API_FORMAT
+  delete process.env.OPENAI_AUTH_HEADER
+  delete process.env.OPENAI_AUTH_SCHEME
+  delete process.env.OPENAI_AUTH_HEADER_VALUE
+}
+
 export async function getAnthropicClient({
   apiKey,
   maxRetries,
@@ -419,6 +437,8 @@ export async function getAnthropicClient({
     envOnlyProviderRouteId === 'nearai' && !useMiniMaxEnvOnlyProvider
   const useFireworksEnvOnlyProvider =
     envOnlyProviderRouteId === 'fireworks' && !useMiniMaxEnvOnlyProvider
+  const useAimlapiEnvOnlyProvider =
+    envOnlyProviderRouteId === 'aimlapi' && !useMiniMaxEnvOnlyProvider
   if (useMiniMaxEnvOnlyProvider) {
     applyMiniMaxEnvOnlyDefaults(model)
   }
@@ -433,6 +453,9 @@ export async function getAnthropicClient({
   }
   if (useFireworksEnvOnlyProvider) {
     applyFireworksEnvOnlyDefaults()
+  }
+  if (useAimlapiEnvOnlyProvider) {
+    applyAimlapiEnvOnlyDefaults()
   }
 
   const shouldUseFirstPartyAuth =
@@ -512,6 +535,7 @@ export async function getAnthropicClient({
     useXaiEnvOnlyProvider ||
     useNearaiEnvOnlyProvider ||
     useFireworksEnvOnlyProvider ||
+    useAimlapiEnvOnlyProvider ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_OPENAI) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GITHUB) ||
     isEnvTruthy(process.env.CLAUDE_CODE_USE_GEMINI) ||

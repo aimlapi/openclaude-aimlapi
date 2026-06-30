@@ -179,10 +179,12 @@ export function getRouteDiscoveryHeaders(
   options?: { headers?: Record<string, string> },
 ): Record<string, string> | undefined {
   const transportConfig = getRouteDescriptor(routeId)?.transportConfig
+  const acceptsCallerHeaders =
+    getRouteCatalog(routeId)?.discovery?.requiresAuth !== false
   const headers = {
     ...(transportConfig?.headers ?? {}),
     ...(transportConfig?.openaiShim?.headers ?? {}),
-    ...(options?.headers ?? {}),
+    ...(acceptsCallerHeaders ? (options?.headers ?? {}) : {}),
   }
 
   return Object.keys(headers).length > 0 ? headers : undefined

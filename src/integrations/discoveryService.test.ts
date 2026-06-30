@@ -450,6 +450,11 @@ describe('discoverModelsForRoute', () => {
 
     const result = await discoverModelsForRoute('aimlapi', {
       apiKey: 'should-not-be-sent',
+      headers: {
+        Authorization: 'Bearer should-not-be-sent',
+        'anthropic-api-key': 'should-not-be-sent',
+        'X-Custom-Secret': 'should-not-be-sent',
+      },
       forceRefresh: true,
     })
 

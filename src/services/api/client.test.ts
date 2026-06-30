@@ -46,6 +46,7 @@ const originalEnv = {
   MIMO_API_KEY: process.env.MIMO_API_KEY,
   VENICE_API_KEY: process.env.VENICE_API_KEY,
   FIREWORKS_API_KEY: process.env.FIREWORKS_API_KEY,
+  AIMLAPI_API_KEY: process.env.AIMLAPI_API_KEY,
   NVIDIA_NIM: process.env.NVIDIA_NIM,
   NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -95,6 +96,7 @@ function clearEnvForMiniMaxOnlyTest(): void {
   delete process.env.MIMO_API_KEY
   delete process.env.VENICE_API_KEY
   delete process.env.FIREWORKS_API_KEY
+  delete process.env.AIMLAPI_API_KEY
   delete process.env.NVIDIA_NIM
   delete process.env.NVIDIA_API_KEY
   delete process.env.ANTHROPIC_API_KEY
@@ -131,6 +133,7 @@ beforeEach(async () => {
   delete process.env.MIMO_API_KEY
   delete process.env.VENICE_API_KEY
   delete process.env.FIREWORKS_API_KEY
+  delete process.env.AIMLAPI_API_KEY
   delete process.env.OPENAI_AUTH_HEADER
   delete process.env.OPENAI_AUTH_SCHEME
   delete process.env.OPENAI_AUTH_HEADER_VALUE
@@ -177,6 +180,7 @@ afterEach(() => {
     restoreEnv('MIMO_API_KEY', originalEnv.MIMO_API_KEY)
     restoreEnv('VENICE_API_KEY', originalEnv.VENICE_API_KEY)
     restoreEnv('FIREWORKS_API_KEY', originalEnv.FIREWORKS_API_KEY)
+    restoreEnv('AIMLAPI_API_KEY', originalEnv.AIMLAPI_API_KEY)
     restoreEnv('NVIDIA_NIM', originalEnv.NVIDIA_NIM)
     restoreEnv('NVIDIA_API_KEY', originalEnv.NVIDIA_API_KEY)
     restoreEnv('ANTHROPIC_API_KEY', originalEnv.ANTHROPIC_API_KEY)
@@ -572,6 +576,80 @@ test('env-only MiniMax fallback ignores non-MiniMax base overrides', async () =>
   expect(process.env.OPENAI_API_KEY).toBeUndefined()
   expect(process.env.OPENAI_BASE_URL).toBe('https://api.openai.com/v1')
   expect(process.env.OPENAI_MODEL).toBe('MiniMax-M2.7')
+})
+
+test('routes env-only AI/ML API requests through the OpenAI-compatible shim', async () => {
+  let capturedUrl: string | undefined
+  let capturedHeaders: Headers | undefined
+  let capturedBody: Record<string, unknown> | undefined
+
+  delete process.env.CLAUDE_CODE_USE_GEMINI
+  delete process.env.GEMINI_API_KEY
+  delete process.env.GEMINI_MODEL
+  delete process.env.GEMINI_BASE_URL
+  delete process.env.GEMINI_AUTH_MODE
+  process.env.AIMLAPI_API_KEY = 'aimlapi-test-key'
+
+  globalThis.fetch = (async (input, init) => {
+    capturedUrl =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+    capturedHeaders = new Headers(init?.headers)
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+
+    return new Response(
+      JSON.stringify({
+        id: 'chatcmpl-aimlapi',
+        model: 'gpt-4o',
+        choices: [
+          {
+            message: { role: 'assistant', content: 'aimlapi ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 8,
+          completion_tokens: 3,
+          total_tokens: 11,
+        },
+      }),
+      { headers: { 'Content-Type': 'application/json' } },
+    )
+  }) as FetchType
+
+  const client = (await getAnthropicClient({
+    maxRetries: 0,
+    model: 'gpt-4o',
+  })) as unknown as ShimClient
+
+  const response = await client.beta.messages.create({
+    model: 'gpt-4o',
+    system: 'test system',
+    messages: [{ role: 'user', content: 'hello' }],
+    max_tokens: 64,
+    stream: false,
+  })
+
+  expect(capturedUrl).toBe('https://api.aimlapi.com/v1/chat/completions')
+  expect(capturedHeaders?.get('authorization')).toBe(
+    'Bearer aimlapi-test-key',
+  )
+  expect(capturedHeaders?.get('x-aimlapi-integration-owner')).toBe('Gitlawb')
+  expect(capturedHeaders?.get('x-aimlapi-integration-repo')).toBe(
+    'Gitlawb/openclaude',
+  )
+  expect(capturedBody?.model).toBe('gpt-4o')
+  expect(process.env.CLAUDE_CODE_USE_OPENAI).toBe('1')
+  expect(process.env.OPENAI_BASE_URL).toBe('https://api.aimlapi.com/v1')
+  expect(process.env.OPENAI_MODEL).toBe('gpt-4o')
+  expect(process.env.OPENAI_API_KEY).toBe('aimlapi-test-key')
+  expect(response).toMatchObject({
+    role: 'assistant',
+    model: 'gpt-4o',
+  })
 })
 
 test('routes env-only xAI requests through the OpenAI-compatible shim', async () => {
