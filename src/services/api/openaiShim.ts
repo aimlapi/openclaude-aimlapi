@@ -38,6 +38,10 @@
 
 import { APIError } from '@anthropic-ai/sdk'
 import {
+  AIMLAPI_PARTNER_HEADER,
+  resolveAimlapiPartnerId,
+} from '../../integrations/aimlapi/partnerHeader.js'
+import {
   readCodexCredentialsAsync,
   refreshCodexAccessTokenIfNeeded,
 } from '../../utils/codexCredentials.js'
@@ -4075,6 +4079,13 @@ class OpenAIShimMessages {
       ...filterAnthropicHeaders(shimConfig.headers),
       ...this.defaultHeaders,
       ...filterAnthropicHeaders(options?.headers),
+    }
+
+    // AI/ML API rebate attribution: tag every request to an aimlapi.com base
+    // URL with the partner id so the gateway can credit the referring agent.
+    const aimlapiPartnerId = resolveAimlapiPartnerId(request.baseUrl)
+    if (aimlapiPartnerId) {
+      baseHeaders[AIMLAPI_PARTNER_HEADER] = aimlapiPartnerId
     }
 
     const isGemini = isGeminiMode()

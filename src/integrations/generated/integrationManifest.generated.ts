@@ -56,13 +56,21 @@ export const PROVIDER_PRESET_MANIFEST = [
     "routeId": "aimlapi",
     "vendorId": "openai",
     "gatewayId": "aimlapi",
-    "description": "AI/ML API OpenAI-compatible endpoint",
+    "description": "AI/ML API — 600+ models via one OpenAI-compatible endpoint (run `openclaude aimlapi topup` to set up)",
+    "label": "AI/ML API",
+    "name": "AI/ML API",
     "apiKeyEnvVars": [
       "AIMLAPI_API_KEY"
     ],
+    "baseUrlEnvVars": [
+      "AIMLAPI_BASE_URL",
+      "OPENAI_BASE_URL"
+    ],
     "modelEnvVars": [
       "OPENAI_MODEL"
-    ]
+    ],
+    "fallbackBaseUrl": "https://api.aimlapi.com/v1",
+    "fallbackModel": "gpt-4o"
   },
   {
     "preset": "dashscope-cn",

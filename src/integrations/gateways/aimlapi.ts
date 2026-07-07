@@ -1,5 +1,4 @@
 import { defineGateway } from '../define.js'
-import { publicBuildVersion } from '../../utils/version.js'
 
 const AIMLAPI_CHAT_MODEL_TYPES = new Set([
   'openai/chat-completions',
@@ -62,10 +61,11 @@ export default defineGateway({
   defaultBaseUrl: 'https://api.aimlapi.com/v1',
   defaultModel: 'gpt-4o',
   supportsModelRouting: true,
+  vendorId: 'openai',
   setup: {
     requiresAuth: true,
     authMode: 'api-key',
-    credentialEnvVars: ['AIMLAPI_API_KEY'],
+    credentialEnvVars: ['AIMLAPI_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
   },
   startup: {
     probeReadiness: 'openai-compatible-models',
@@ -73,34 +73,37 @@ export default defineGateway({
   transportConfig: {
     kind: 'openai-compatible',
     openaiShim: {
-      headers: {
-        'X-AIMLAPI-Partner-ID': 'Gitlawb',
-        'X-AIMLAPI-Integration-Repo': 'Gitlawb/openclaude',
-        'X-AIMLAPI-Integration-Version': publicBuildVersion,
-        // Attribution headers AI/ML API records for api.aimlapi.com requests
-        // (issue #835). `HTTP-Referer`/`X-Title` identify the referring app.
-        'HTTP-Referer': 'OpenClaude',
-        'X-Title': 'OpenClaude',
-      },
-      supportsAuthHeaders: false,
+      defaultAuthHeader: { name: 'authorization', scheme: 'bearer' },
     },
   },
   preset: {
     id: 'aimlapi',
-    description: 'AI/ML API OpenAI-compatible endpoint',
+    description:
+      'AI/ML API — 600+ models via one OpenAI-compatible endpoint (run `openclaude aimlapi topup` to set up)',
     apiKeyEnvVars: ['AIMLAPI_API_KEY'],
+    label: 'AI/ML API',
+    name: 'AI/ML API',
     modelEnvVars: ['OPENAI_MODEL'],
+    baseUrlEnvVars: ['AIMLAPI_BASE_URL', 'OPENAI_BASE_URL'],
+    fallbackBaseUrl: 'https://api.aimlapi.com/v1',
+    fallbackModel: 'gpt-4o',
     vendorId: 'openai',
   },
   validation: {
     kind: 'credential-env',
-    routing: {
-      matchDefaultBaseUrl: true,
-      matchBaseUrlHosts: ['api.aimlapi.com'],
-    },
-    credentialEnvVars: ['AIMLAPI_API_KEY', 'OPENAI_API_KEY'],
+    credentialEnvVars: ['AIMLAPI_API_KEY', 'OPENAI_API_KEYS', 'OPENAI_API_KEY'],
     missingCredentialMessage:
-      'AI/ML API auth is required. Set AIMLAPI_API_KEY or OPENAI_API_KEY.',
+      'An AI/ML API key is required.\n' +
+      'Run `openclaude aimlapi topup` to log in, top up your balance, and set a key automatically — ' +
+      'or paste an existing key from https://aimlapi.com/app/keys as AIMLAPI_API_KEY.',
+    routing: {
+      matchBaseUrlHosts: [
+        'api.aimlapi.com',
+        'api-staging.aimlapi.com',
+        'ai.aimlapi.com',
+        'ai-staging.aimlapi.com',
+      ],
+    },
   },
   catalog: {
     source: 'hybrid',

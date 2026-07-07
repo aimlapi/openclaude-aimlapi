@@ -48,6 +48,13 @@ import {
 import { openAIShimSupportsApiFormatForModel } from '../integrations/runtimeMetadata.js'
 import { probeRouteReadiness } from '../integrations/discoveryService.js'
 import {
+  provisionAimlapiKey,
+  type AimlapiTopupStatus,
+} from '../integrations/aimlapi/index.js'
+import {
+  AimlapiApiError,
+} from '../integrations/aimlapi/client.js'
+import {
   addProviderProfile,
   applyActiveProviderProfileFromConfig,
   deleteProviderProfile,
@@ -106,6 +113,10 @@ type Screen =
   | 'select-atomic-chat-model'
   | 'codex-oauth'
   | 'xai-oauth'
+  | 'aimlapi-key-source'
+  | 'aimlapi-email'
+  | 'aimlapi-password'
+  | 'aimlapi-topup'
   | 'form'
   | 'preset-model'
   | 'preset-api-key'
@@ -149,6 +160,58 @@ type AtomicChatSelectionState =
       defaultValue?: string
     }
   | { state: 'unavailable'; message: string }
+
+type AimlapiTopupDraft = {
+  email: string
+  password: string
+}
+
+function getAimlapiErrorBodyMessage(body: string): string | null {
+  const trimmed = body.trim()
+  if (!trimmed) return null
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      for (const key of ['message', 'error', 'detail']) {
+        const value = record[key]
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim()
+        }
+      }
+    }
+  } catch {
+    // Fall through to the raw body.
+  }
+
+  return trimmed.length > 240 ? `${trimmed.slice(0, 237)}...` : trimmed
+}
+
+function formatAimlapiSetupError(error: unknown): string {
+  if (error instanceof AimlapiApiError) {
+    const bodyMessage = getAimlapiErrorBodyMessage(error.body)
+    const statusLabel = error.status > 0 ? `HTTP ${error.status}` : 'network'
+    return bodyMessage
+      ? `${statusLabel}: ${bodyMessage}`
+      : `${statusLabel}: ${error.message}`
+  }
+
+  return error instanceof Error ? error.message : String(error)
+}
+
+function getAimlapiRetryScreen(error: unknown): Screen {
+  if (error instanceof AimlapiApiError) {
+    if (error.status === 400) {
+      return 'aimlapi-email'
+    }
+    if (error.status === 401 || error.status === 403 || error.status === 409) {
+      return 'aimlapi-password'
+    }
+  }
+
+  return 'aimlapi-key-source'
+}
 
 const FORM_STEPS: Array<{
   key: DraftField
@@ -753,6 +816,13 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
   })
   const [atomicChatSelection, setAtomicChatSelection] =
     React.useState<AtomicChatSelectionState>({ state: 'idle' })
+  const [aimlapiTopupDraft, setAimlapiTopupDraft] =
+    React.useState<AimlapiTopupDraft>({
+      email: process.env.AIMLAPI_EMAIL?.trim() ?? '',
+      password: '',
+    })
+  const [aimlapiTopupStatus, setAimlapiTopupStatus] =
+    React.useState<string>('Preparing AI/ML API top-up...')
   // Deferred initialization: useState initializers run synchronously during
   // render, so getProviderProfiles() and getActiveProviderProfile() would block
   // the UI (sync file I/O). Defer to queueMicrotask after first render.
@@ -1443,6 +1513,11 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
       return
     }
 
+    if (preset === 'aimlapi') {
+      setScreen('aimlapi-key-source')
+      return
+    }
+
     if (preset === 'custom' || !canUseStreamlinedPresetFlow(nextDraft)) {
       setScreen('form')
       return
@@ -1836,6 +1911,217 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
     context: 'Settings',
     isActive: screen === 'xai-oauth',
   })
+
+  function handleBackFromAimlapiSetup(): void {
+    setErrorMessage(undefined)
+    setCursorOffset(draft.model.length)
+    setScreen('aimlapi-key-source')
+  }
+
+  useKeybinding('confirm:no', handleBackFromAimlapiSetup, {
+    context: 'Settings',
+    isActive:
+      screen === 'aimlapi-email' ||
+      screen === 'aimlapi-password',
+  })
+
+  React.useEffect(() => {
+    if (screen !== 'aimlapi-topup') {
+      return
+    }
+
+    let cancelled = false
+    setErrorMessage(undefined)
+    setAimlapiTopupStatus('Preparing AI/ML API top-up...')
+
+    const statusLabels: Record<AimlapiTopupStatus, string> = {
+      'registering': 'Trying AI/ML API account registration...',
+      'registered': 'Account registered. Creating top-up session...',
+      'signing-in': 'Registration did not complete. Trying login...',
+      'signed-in': 'Logged in. Creating top-up session...',
+      'creating-session': 'Creating top-up session...',
+      'opening-checkout': 'Opening AI/ML API top-up page...',
+      'waiting-payment': 'Waiting for payment to complete...',
+      'provisioning-key': 'Payment confirmed. Creating API key...',
+    }
+
+    void provisionAimlapiKey({
+      email: aimlapiTopupDraft.email,
+      password: aimlapiTopupDraft.password,
+      model: draft.model,
+      onStatus: (status, detail) => {
+        if (!cancelled) {
+          setAimlapiTopupStatus(
+            detail ? `${statusLabels[status]} ${detail}` : statusLabels[status],
+          )
+        }
+      },
+    })
+      .then(provisioned => {
+        if (cancelled) return
+        const nextDraft = applyPresetApiFormat(
+          {
+            ...draft,
+            baseUrl: provisioned.baseUrl,
+            model: provisioned.model,
+            apiKey: provisioned.apiKey,
+          },
+          draftProvider,
+        )
+        setDraft(nextDraft)
+        persistDraft(nextDraft, draftProvider, null)
+      })
+      .catch(error => {
+        if (cancelled) return
+        const message = formatAimlapiSetupError(error)
+        setErrorMessage(`AI/ML API top-up failed: ${message}`)
+        setScreen(getAimlapiRetryScreen(error))
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    aimlapiTopupDraft,
+    draft,
+    draftProvider,
+    screen,
+  ])
+
+  function renderAimlapiKeySource(): React.ReactNode {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text color="remember" bold>
+          AI/ML API setup
+        </Text>
+        <Text dimColor>
+          Choose how to configure the API key for this provider profile.
+        </Text>
+        {errorMessage && <Text color="error">{errorMessage}</Text>}
+        <Select
+          options={[
+            {
+              value: 'topup',
+              label: 'Top up and create key',
+              description:
+                'Sign in or create an account, pay through checkout, then save the issued key automatically',
+            },
+            {
+              value: 'existing',
+              label: 'Use existing key',
+              description: 'Paste an API key you already created in AI/ML API',
+            },
+          ]}
+          inlineDescriptions
+          visibleOptionCount={2}
+          onChange={(value: string) => {
+            setErrorMessage(undefined)
+            if (value === 'topup') {
+              setCursorOffset(aimlapiTopupDraft.email.length)
+              setScreen('aimlapi-email')
+              return
+            }
+            setCursorOffset(draft.model.length)
+            setScreen('preset-model')
+          }}
+          onCancel={() => setScreen('select-preset')}
+        />
+      </Box>
+    )
+  }
+
+  function renderAimlapiTextStep(options: {
+    title: string
+    description: string
+    value: string
+    placeholder: string
+    mask?: string
+    onChange: (value: string) => void
+    onSubmit: (value: string) => void
+  }): React.ReactNode {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text color="remember" bold>
+          {options.title}
+        </Text>
+        <Text dimColor>{options.description}</Text>
+        <Box flexDirection="row" gap={1}>
+          <Text>{figures.pointer}</Text>
+          <TextInput
+            value={options.value}
+            onChange={options.onChange}
+            onSubmit={options.onSubmit}
+            focus={true}
+            showCursor={true}
+            placeholder={options.placeholder}
+            mask={options.mask}
+            columns={inputColumns}
+            cursorOffset={cursorOffset}
+            onChangeCursorOffset={setCursorOffset}
+          />
+        </Box>
+        {errorMessage && <Text color="error">{errorMessage}</Text>}
+        <Text dimColor>Press Enter to continue. Press Esc to go back.</Text>
+      </Box>
+    )
+  }
+
+  function renderAimlapiEmail(): React.ReactNode {
+    return renderAimlapiTextStep({
+      title: 'AI/ML API setup',
+      description: 'Enter the AI/ML API account email. New accounts are registered before checkout; existing accounts fall back to login.',
+      value: aimlapiTopupDraft.email,
+      placeholder: 'you@example.com',
+      onChange: value =>
+        setAimlapiTopupDraft(prev => ({ ...prev, email: value })),
+      onSubmit: value => {
+        const email = value.trim()
+        if (!email) {
+          setErrorMessage('Email is required.')
+          return
+        }
+        setAimlapiTopupDraft(prev => ({ ...prev, email }))
+        setErrorMessage(undefined)
+        setCursorOffset(0)
+        setScreen('aimlapi-password')
+      },
+    })
+  }
+
+  function renderAimlapiPassword(): React.ReactNode {
+    return renderAimlapiTextStep({
+      title: 'AI/ML API setup',
+      description: 'Enter the AI/ML API password. It is used only to sign in or create the checkout account.',
+      value: aimlapiTopupDraft.password,
+      placeholder: 'Password',
+      mask: '*',
+      onChange: value =>
+        setAimlapiTopupDraft(prev => ({ ...prev, password: value })),
+      onSubmit: value => {
+        if (!value) {
+          setErrorMessage('Password is required.')
+          return
+        }
+        setAimlapiTopupDraft(prev => ({ ...prev, password: value }))
+        setErrorMessage(undefined)
+        setScreen('aimlapi-topup')
+      },
+    })
+  }
+
+  function renderAimlapiTopup(): React.ReactNode {
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text color="remember" bold>
+          AI/ML API setup
+        </Text>
+        <Text>{aimlapiTopupStatus}</Text>
+        <Text dimColor>
+          Keep OpenClaude open while you finish top-up in the browser.
+        </Text>
+      </Box>
+    )
+  }
 
   function renderPresetSelection(): React.ReactNode {
     const canUseCodexOAuth = !isBareMode()
@@ -2465,6 +2751,18 @@ export function ProviderManager({ mode, onDone }: Props): React.ReactNode {
           }}
         />
       )
+      break
+    case 'aimlapi-key-source':
+      content = renderAimlapiKeySource()
+      break
+    case 'aimlapi-email':
+      content = renderAimlapiEmail()
+      break
+    case 'aimlapi-password':
+      content = renderAimlapiPassword()
+      break
+    case 'aimlapi-topup':
+      content = renderAimlapiTopup()
       break
     case 'codex-oauth':
       content = (

@@ -246,7 +246,7 @@ function mockProviderProfilesModule(options?: {
 
       if (preset === 'aimlapi') {
         return {
-          provider: 'aimlapi',
+          provider: 'openai',
           name: 'AI/ML API',
           baseUrl: 'https://api.aimlapi.com/v1',
           model: 'gpt-4o',
@@ -324,6 +324,7 @@ function mockProviderManagerDependencies(
     codexAsyncRead?: () => Promise<unknown>
     updateProviderProfile?: (...args: any[]) => unknown
     setActiveProviderProfile?: (...args: any[]) => unknown
+    provisionAimlapiKey?: (...args: any[]) => Promise<unknown>
     useCodexOAuthFlow?: (options: {
       onAuthenticated: (
         tokens: {
@@ -427,6 +428,18 @@ function mockProviderManagerDependencies(
       env,
       createdAt: '2026-04-10T00:00:00.000Z',
     }),
+  }))
+
+  mock.module('../integrations/aimlapi/index.js', () => ({
+    provisionAimlapiKey:
+      options?.provisionAimlapiKey ??
+      (async () => ({
+        apiKey: 'aimlapi-created-key',
+        apiKeyId: 'key_test',
+        baseUrl: 'https://api.aimlapi.com/v1',
+        model: 'gpt-4o',
+        environment: 'production',
+      })),
   }))
 
   mock.module('../utils/settings/settings.js', () => ({
@@ -828,68 +841,6 @@ test('ProviderManager saves OpenAI preset GPT-5 models with Responses API', asyn
         provider: 'openai',
         model: 'gpt-5.5',
         apiFormat: 'responses',
-      }),
-      expect.objectContaining({ makeActive: true }),
-    )
-  } finally {
-    await mounted.dispose()
-  }
-})
-
-test('ProviderManager saves AI/ML API preset with OpenAI-compatible defaults', async () => {
-  const addProviderProfile = mock((payload: any) => ({
-    id: 'aimlapi_profile',
-    ...payload,
-  }))
-
-  mockProviderManagerDependencies(() => undefined, async () => undefined, {
-    addProviderProfile,
-  })
-
-  const nonce = `${Date.now()}-${Math.random()}`
-  const { ProviderManager } = await import(`./ProviderManager.js?ts=${nonce}`)
-  const mounted = await mountProviderManager(ProviderManager)
-
-  try {
-    await waitForFrameOutput(mounted.getOutput, frame =>
-      frame.includes('Provider manager'),
-    )
-
-    mounted.stdin.write('\r')
-    await waitForFrameOutput(mounted.getOutput, frame =>
-      frame.includes('Choose provider preset'),
-    )
-
-    await navigateToPreset(mounted.stdin, 'AI/ML API')
-    mounted.stdin.write('\r')
-    const modelOutput = await waitForFrameOutput(mounted.getOutput, frame =>
-      frame.includes('Create provider profile') &&
-      frame.includes('Step 1 of 2: Default model'),
-    )
-
-    expect(modelOutput).toContain('AI/ML API')
-    expect(modelOutput).toContain('gpt-4o')
-    expect(modelOutput).not.toContain('Provider name')
-    expect(modelOutput).not.toContain('Base URL')
-
-    mounted.stdin.write('\r')
-    await waitForFrameOutput(mounted.getOutput, frame =>
-      frame.includes('Step 2 of 2: API key'),
-    )
-
-    mounted.stdin.write('aimlapi-test-key')
-    await Bun.sleep(25)
-    mounted.stdin.write('\r')
-
-    await waitForCondition(() => addProviderProfile.mock.calls.length > 0)
-    expect(addProviderProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: 'aimlapi',
-        name: 'AI/ML API',
-        baseUrl: 'https://api.aimlapi.com/v1',
-        model: 'gpt-4o',
-        apiKey: 'aimlapi-test-key',
-        apiFormat: 'chat_completions',
       }),
       expect.objectContaining({ makeActive: true }),
     )
