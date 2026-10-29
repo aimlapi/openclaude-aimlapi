@@ -1726,15 +1726,6 @@ async function run(): Promise<CommanderCommand> {
       return allowed;
     }) : Promise.resolve({});
 
-    // Register built-in plugins before the first plugin/MCP discovery below.
-    // loadAllPluginsCacheOnly() memoizes its result, and getInputPrompt() can
-    // await piped stdin long enough for that discovery to finish, so a later
-    // registration would leave an enabled built-in plugin (and its MCP
-    // servers) out of the session. In-memory map writes only, no I/O.
-    if (process.env.CLAUDE_CODE_ENTRYPOINT !== 'local-agent') {
-      initBuiltinPlugins();
-    }
-
     // Kick off MCP config loading early (safe - just reads files, no execution).
     // Both interactive and -p use getClaudeCodeMcpConfigs (local file reads only).
     // The local promise is awaited later (before prefetchAllMcpResources) to
@@ -1863,12 +1854,12 @@ async function run(): Promise<CommanderCommand> {
     // since --worktree makes setup() process.chdir() (setup.ts:203), and
     // commands/agents need the post-chdir cwd.
     const preSetupCwd = getCwd();
-    // Register bundled skills before kicking getCommands() — they're pure
-    // in-memory array pushes (<1ms, zero I/O) that getBundledSkills() reads
-    // synchronously. Previously ran inside setup() after ~20ms of await
-    // points, so the parallel getCommands() memoized an empty list. Built-in
-    // plugins are registered earlier, before the first MCP config load.
+    // Register bundled skills/plugins before kicking getCommands() — they're
+    // pure in-memory array pushes (<1ms, zero I/O) that getBundledSkills()
+    // reads synchronously. Previously ran inside setup() after ~20ms of
+    // await points, so the parallel getCommands() memoized an empty list.
     if (process.env.CLAUDE_CODE_ENTRYPOINT !== 'local-agent') {
+      initBuiltinPlugins();
       initBundledSkills();
     }
     const setupPromise = setup(preSetupCwd, permissionMode, allowDangerouslySkipPermissions, worktreeEnabled, worktreeName, tmuxEnabled, sessionId ? validateUuid(sessionId) : undefined, worktreePRNumber, messagingSocketPath);
