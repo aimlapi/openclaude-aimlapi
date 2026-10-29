@@ -1,8 +1,7 @@
 import {
   AIMLAPI_MCP_URL,
-  isCanonicalAimlapiInferenceBaseUrl,
+  hasAimlapiMcpCredential,
 } from '../../integrations/aimlapi/config.js'
-import { firstUsableCredential } from '../../services/api/credentialPool.js'
 import { registerBuiltinPlugin } from '../builtinPlugins.js'
 
 export const AIMLAPI_MCP_PLUGIN_NAME = 'aimlapi'
@@ -16,27 +15,6 @@ export const AIMLAPI_MCP_SERVER_NAME = 'aimlapi'
  * AIMLAPI_API_KEY for the session, and a user can export it directly.
  */
 const AIMLAPI_MCP_AUTHORIZATION = 'Bearer ${AIMLAPI_API_KEY}'
-
-/**
- * Whether the session holds an AI/ML API key this plugin may send to the MCP
- * host. When the aimlapi route is retargeted to a non-canonical base URL (a
- * user proxy), the profile exports that proxy's credential under the same
- * variable name, so it is withheld rather than forwarded to aimlapi.com.
- */
-export function hasAimlapiMcpCredential(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (!firstUsableCredential(env.AIMLAPI_API_KEY)) return false
-  const baseUrl = env.OPENAI_BASE_URL?.trim() || env.OPENAI_API_BASE?.trim()
-  if (
-    env.CLAUDE_CODE_PROVIDER_ROUTE_ID === 'aimlapi' &&
-    baseUrl &&
-    !isCanonicalAimlapiInferenceBaseUrl(baseUrl)
-  ) {
-    return false
-  }
-  return true
-}
 
 /**
  * Opt-in built-in plugin exposing the AI/ML API MCP server (Toolbox `tools_*`,
