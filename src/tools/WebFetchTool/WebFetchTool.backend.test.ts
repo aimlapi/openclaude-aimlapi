@@ -1,25 +1,41 @@
-import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 
+import * as claudeApi from '../../services/api/claude.js'
+import { snapshotEnv } from '../../test/envSnapshot.js'
 import {
   acquireSharedMutationLock,
   releaseSharedMutationLock,
 } from '../../test/sharedMutationLock.js'
 import { asMockFetch } from '../../test/typedMocks.js'
+import { createAssistantMessage } from '../../utils/messages/factories.js'
 
-// WebFetch hands scraped markdown to the secondary model. Mock it so the test
-// exercises only backend selection.
-const haikuMock = mock()
 const fetchMock = mock()
 const originalFetch = globalThis.fetch
-const ENV_KEYS = ['AIMLAPI_API_KEY', 'FIRECRAWL_API_KEY', 'FIRECRAWL_API_URL', 'WEB_FETCH_PROVIDER'] as const
-const originalEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]))
+// The route and both base-URL spellings decide whether AIMLAPI_API_KEY may be
+// sent: an ambient aimlapi proxy profile would withhold the test key, so they
+// are cleared along with the backend selectors.
+const ENV_KEYS = [
+  'AIMLAPI_API_KEY',
+  'FIRECRAWL_API_KEY',
+  'FIRECRAWL_API_URL',
+  'WEB_FETCH_PROVIDER',
+  'CLAUDE_CODE_PROVIDER_ROUTE_ID',
+  'OPENAI_BASE_URL',
+  'OPENAI_API_BASE',
+] as const
+let restoreEnv: (() => void) | undefined
 
 beforeEach(async () => {
   await acquireSharedMutationLock('tools/WebFetchTool/WebFetchTool.backend.test.ts')
-  haikuMock.mockReset()
-  haikuMock.mockImplementation(async ({ userPrompt }: { userPrompt: string }) => ({
-    message: { content: [{ type: 'text', text: `summary of: ${userPrompt.includes('# Scraped page') ? 'scraped page' : 'other'}` }] },
-  }))
+  restoreEnv = snapshotEnv(ENV_KEYS, { clear: true })
+  // WebFetch hands scraped markdown to the secondary model. Stub it with a
+  // spy, which mock.restore() removes, so the test exercises only backend
+  // selection and later test files still get the real queryHaiku.
+  spyOn(claudeApi, 'queryHaiku').mockImplementation(async ({ userPrompt }) =>
+    createAssistantMessage({
+      content: `summary of: ${userPrompt.includes('# Scraped page') ? 'scraped page' : 'other'}`,
+    }),
+  )
   fetchMock.mockReset()
   fetchMock.mockImplementation(async (input: unknown) => {
     const host = new URL(String(input)).hostname
@@ -38,22 +54,14 @@ beforeEach(async () => {
     throw new Error(`unexpected request to ${host}`)
   })
   globalThis.fetch = asMockFetch(fetchMock)
-  const actual = await import('../../services/api/claude.js')
-  mock.module('../../services/api/claude.js', () => ({
-    ...actual,
-    queryHaiku: haikuMock,
-  }))
 })
 
 afterEach(() => {
   try {
     globalThis.fetch = originalFetch
-    for (const key of ENV_KEYS) {
-      const value = originalEnv[key]
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
     mock.restore()
+    restoreEnv?.()
+    restoreEnv = undefined
   } finally {
     releaseSharedMutationLock()
   }
@@ -78,8 +86,6 @@ function requestedHosts(): string[] {
 test('an AI/ML API key alone keeps WebFetch on the Firecrawl backend', async () => {
   process.env.AIMLAPI_API_KEY = 'aiml-test-key'
   process.env.FIRECRAWL_API_KEY = 'fc-test-key'
-  delete process.env.FIRECRAWL_API_URL
-  delete process.env.WEB_FETCH_PROVIDER
 
   const { data } = await runWebFetch()
 
@@ -118,5 +124,5 @@ test('an AI/ML API failure is reported, not retried through another backend', as
 
   await expect(runWebFetch()).rejects.toThrow('The provider answered HTTP 400.')
   expect(requestedHosts()).toEqual(['tools.aimlapi.com'])
-  expect(haikuMock).not.toHaveBeenCalled()
+  expect(claudeApi.queryHaiku).not.toHaveBeenCalled()
 })
