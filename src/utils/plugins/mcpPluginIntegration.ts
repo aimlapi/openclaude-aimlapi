@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { getBuiltinPluginDefinition } from '../../plugins/builtinPlugins.js'
 import { expandEnvVarsInString } from '../../services/mcp/envExpansion.js'
 import {
   type McpServerConfig,
@@ -335,6 +336,20 @@ function loadChannelUserConfig(
 }
 
 /**
+ * A built-in plugin's isAvailable() runs during plugin discovery, and that
+ * result is memoized (loadAllPluginsCacheOnly). Its MCP server configs are
+ * resolved from the environment afresh on every load, so check availability
+ * again here: a server whose environment stopped qualifying after discovery
+ * (e.g. a provider switch replaced the credential it references) is not
+ * resolved at all.
+ */
+function isBuiltinPluginUnavailable(plugin: LoadedPlugin): boolean {
+  if (!plugin.isBuiltin) return false
+  const definition = getBuiltinPluginDefinition(plugin.name)
+  return definition?.isAvailable ? !definition.isAvailable() : false
+}
+
+/**
  * Add plugin scope to MCP server configs
  * This adds a prefix to server names to avoid conflicts between plugins
  */
@@ -371,7 +386,7 @@ export async function extractMcpServersFromPlugins(
 
   const scopedResults = await Promise.all(
     plugins.map(async plugin => {
-      if (!plugin.enabled) return null
+      if (!plugin.enabled || isBuiltinPluginUnavailable(plugin)) return null
 
       const servers = await loadPluginMcpServers(plugin, errors)
       if (!servers) return null
@@ -590,7 +605,7 @@ export async function getPluginMcpServers(
   plugin: LoadedPlugin,
   errors: PluginError[] = [],
 ): Promise<Record<string, ScopedMcpServerConfig> | undefined> {
-  if (!plugin.enabled) {
+  if (!plugin.enabled || isBuiltinPluginUnavailable(plugin)) {
     return undefined
   }
 

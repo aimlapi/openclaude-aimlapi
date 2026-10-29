@@ -9,6 +9,8 @@
  * Override any single URL via the corresponding `AIMLAPI_*_URL` env var.
  */
 
+import { firstUsableCredential } from '../../services/api/credentialPool.js'
+
 export type AimlapiEndpoints = {
   /** app/auth service - mints the user access (Bearer) token. */
   authBaseUrl: string
@@ -249,6 +251,119 @@ export function resolveAimlapiAttributionHeaders(
   }
 
   return rest
+}
+
+/**
+ * AI/ML API MCP server (streamable HTTP). It accepts the same
+ * `Authorization: Bearer <AIMLAPI key>` as the inference API and falls back to
+ * OAuth when no Authorization header is sent.
+ */
+export const AIMLAPI_MCP_URL = 'https://mcp.aimlapi.com/mcp'
+const AIMLAPI_MCP_HOSTNAME = new URL(AIMLAPI_MCP_URL).hostname
+
+/**
+ * True only for an https URL whose hostname is exactly the AI/ML API MCP host.
+ * Deliberately not a suffix match: attribution must never reach a look-alike
+ * (`mcp.aimlapi.com.evil.test`) or a sibling host the user pointed elsewhere.
+ */
+export function isAimlapiMcpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (
+      parsed.protocol === 'https:' &&
+      parsed.hostname.toLowerCase() === AIMLAPI_MCP_HOSTNAME
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether the session holds an AI/ML API key that may be sent to the MCP host.
+ * When the aimlapi route is retargeted to a non-canonical base URL (a user
+ * proxy), the profile exports that proxy's credential under the same variable
+ * name, so it is withheld rather than forwarded to aimlapi.com.
+ *
+ * Read from the live environment on every call: a provider switch can replace
+ * AIMLAPI_API_KEY at any point in a session.
+ */
+export function hasAimlapiMcpCredential(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!firstUsableCredential(env.AIMLAPI_API_KEY)) return false
+  const baseUrl = env.OPENAI_BASE_URL?.trim() || env.OPENAI_API_BASE?.trim()
+  if (
+    env.CLAUDE_CODE_PROVIDER_ROUTE_ID === 'aimlapi' &&
+    baseUrl &&
+    !isCanonicalAimlapiInferenceBaseUrl(baseUrl)
+  ) {
+    return false
+  }
+  return true
+}
+
+/**
+ * `pluginSource` stamped on the MCP server of the built-in `aimlapi` plugin
+ * (`{name}@builtin`, see src/plugins/bundled/aimlapiMcp.ts).
+ */
+export const AIMLAPI_MCP_BUILTIN_PLUGIN_SOURCE = 'aimlapi@builtin'
+
+/**
+ * Connection-time guard for the built-in plugin's server. Its config is only
+ * resolved while hasAimlapiMcpCredential() holds, but a provider switch can
+ * replace the session's AIMLAPI_API_KEY afterwards. The connection is then
+ * refused rather than authenticated with a key the session no longer routes
+ * to aimlapi.com. Servers from any other source are not affected.
+ */
+export function assertAimlapiMcpBuiltinCredential(
+  pluginSource: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (pluginSource !== AIMLAPI_MCP_BUILTIN_PLUGIN_SOURCE) return
+  if (hasAimlapiMcpCredential(env)) return
+  throw new Error(
+    'The aimlapi@builtin MCP server was not connected: AIMLAPI_API_KEY is not set to an aimlapi.com key in this session.',
+  )
+}
+
+/**
+ * An aimlapi provider profile can export a comma-separated credential pool as
+ * AIMLAPI_API_KEY, so `Bearer ${AIMLAPI_API_KEY}` can expand to several keys.
+ * The MCP server takes one key: keep the first usable one, as the web search
+ * backend does. Any other Authorization value is returned unchanged.
+ *
+ * The payload is matched with `[\s\S]` so a pool whose entries are separated
+ * by line breaks (LF or CRLF) reaches the shared selector whole; it trims every
+ * entry, so the selected key never carries a line break into the header.
+ */
+function singleBearerCredential(value: string): string {
+  const match = /^Bearer\s+([\s\S]+)$/i.exec(value.trim())
+  if (!match?.[1]?.includes(',')) return value
+  const key = firstUsableCredential(match[1])
+  return key ? `Bearer ${key}` : value
+}
+
+/**
+ * Stamp the mandatory attribution headers onto an MCP server's request headers
+ * when (and only when) the server is the AI/ML API MCP host. This covers both
+ * the built-in `aimlapi` plugin server and a server the user added by hand
+ * with `openclaude mcp add`. Any other MCP server's headers are returned
+ * untouched. Managed names are restamped through the same helper the
+ * inference path uses, so a configured header cannot replace the partner id.
+ */
+export function resolveAimlapiMcpHeaders(
+  headers: Readonly<Record<string, string>>,
+  url: string,
+): Record<string, string> {
+  if (!isAimlapiMcpUrl(url)) return { ...headers }
+  const single: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    single[name] = name.trim().toLowerCase() === 'authorization'
+      ? singleBearerCredential(value)
+      : value
+  }
+  // An undefined base URL selects the canonical (attributed) branch.
+  return resolveAimlapiAttributionHeaders(single, undefined)
 }
 
 /**

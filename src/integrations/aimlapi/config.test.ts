@@ -2,12 +2,15 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 
 import {
   AIMLAPI_MANAGED_ATTRIBUTION_HEADER_NAMES,
+  AIMLAPI_MCP_URL,
   DEFAULT_PARTNER_ID,
   buildPartnerCheckoutReturnUrls,
   buildPartnerReturnUrl,
+  isAimlapiMcpUrl,
   isCanonicalAimlapiInferenceBaseUrl,
   isTrustedAimlapiRequestUrl,
   resolveAimlapiAttributionHeaders,
+  resolveAimlapiMcpHeaders,
   resolvePartnerId,
   resolveEndpoints,
   withResolvedPartnerHeader,
@@ -263,4 +266,118 @@ test('proxy attribution strips every managed name spelling and keeps X-Tenant', 
   }
   expect(headers.get('x-tenant')).toBe('acme')
   expect(Object.keys(resolved)).toEqual(['X-Tenant'])
+})
+
+test('MCP host gate is an exact https hostname match, never a suffix', () => {
+  expect(isAimlapiMcpUrl(AIMLAPI_MCP_URL)).toBe(true)
+  expect(isAimlapiMcpUrl('https://MCP.aimlapi.com/mcp')).toBe(true)
+  expect(isAimlapiMcpUrl('https://mcp.aimlapi.com:443/other')).toBe(true)
+  // Sibling aimlapi hosts are not the MCP server.
+  expect(isAimlapiMcpUrl('https://api.aimlapi.com/v1')).toBe(false)
+  expect(isAimlapiMcpUrl('https://staging.mcp.aimlapi.com/mcp')).toBe(false)
+  // Look-alikes, cleartext and garbage are rejected.
+  expect(isAimlapiMcpUrl('https://mcp.aimlapi.com.attacker.test/mcp')).toBe(false)
+  expect(isAimlapiMcpUrl('https://evilmcp.aimlapi.com/mcp')).toBe(false)
+  expect(isAimlapiMcpUrl('https://attacker.test/mcp.aimlapi.com/mcp')).toBe(false)
+  expect(isAimlapiMcpUrl('http://mcp.aimlapi.com/mcp')).toBe(false)
+  expect(isAimlapiMcpUrl('not-a-url')).toBe(false)
+})
+
+test('MCP headers gain both mandatory attribution headers on the MCP host only', () => {
+  const resolved = resolveAimlapiMcpHeaders(
+    { Authorization: 'Bearer test-key' },
+    AIMLAPI_MCP_URL,
+  )
+  expectSingleManagedAttribution(resolved, {
+    'X-AIMLAPI-Source': 'agent/openclaude',
+    'X-AIMLAPI-Partner-ID': DEFAULT_PARTNER_ID,
+  })
+  expect(resolved.Authorization).toBe('Bearer test-key')
+
+  // Any other MCP server keeps exactly the headers it was configured with.
+  for (const url of [
+    'https://mcp.example.test/mcp',
+    'https://mcp.aimlapi.com.attacker.test/mcp',
+    'http://mcp.aimlapi.com/mcp',
+  ]) {
+    expect(resolveAimlapiMcpHeaders({ 'X-Tenant': 'acme' }, url)).toEqual({
+      'X-Tenant': 'acme',
+    })
+  }
+})
+
+test('MCP attribution restamps a configured partner id instead of combining it', () => {
+  const resolved = resolveAimlapiMcpHeaders(
+    {
+      'x-aimlapi-partner-id': 'part_attacker',
+      'X-AIMLAPI-SOURCE': 'agent/attacker',
+      'X-Tenant': 'acme',
+    },
+    AIMLAPI_MCP_URL,
+  )
+  expectSingleManagedAttribution(resolved, {
+    'X-AIMLAPI-Source': 'agent/openclaude',
+    'X-AIMLAPI-Partner-ID': DEFAULT_PARTNER_ID,
+  })
+  expect(new Headers(resolved).get('x-aimlapi-partner-id')).not.toContain(',')
+  expect(resolved['X-Tenant']).toBe('acme')
+})
+
+test('MCP Authorization keeps only the first key of a pooled credential', () => {
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer aiml-first-key, aiml-second-key' },
+      AIMLAPI_MCP_URL,
+    ).Authorization,
+  ).toBe('Bearer aiml-first-key')
+  // A single key and a non-bearer value pass through unchanged.
+  expect(
+    resolveAimlapiMcpHeaders({ Authorization: 'Bearer aiml-only-key' }, AIMLAPI_MCP_URL)
+      .Authorization,
+  ).toBe('Bearer aiml-only-key')
+  expect(
+    resolveAimlapiMcpHeaders({ authorization: 'Basic abc,def' }, AIMLAPI_MCP_URL)
+      .authorization,
+  ).toBe('Basic abc,def')
+  // Other MCP servers keep exactly what they were configured with.
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer first, second' },
+      'https://mcp.example.test/mcp',
+    ),
+  ).toEqual({ Authorization: 'Bearer first, second' })
+})
+
+test('MCP Authorization reduces a line-broken pool to one header-safe key', () => {
+  // An expanded `Bearer ${AIMLAPI_API_KEY}` keeps whatever whitespace the pool
+  // was written with. firstUsableCredential accepts these pools, so the MCP
+  // header must reduce them too instead of handing Headers a line break.
+  for (const pool of [
+    'aiml-first-key,\naiml-second-key',
+    'aiml-first-key,\r\naiml-second-key',
+    'aiml-first-key\n, aiml-second-key',
+    ',\naiml-first-key, aiml-second-key',
+    '\r\n,aiml-first-key,\r\naiml-second-key',
+  ]) {
+    const authorization = resolveAimlapiMcpHeaders(
+      { Authorization: `Bearer ${pool}` },
+      AIMLAPI_MCP_URL,
+    ).Authorization
+    expect(authorization).toBe('Bearer aiml-first-key')
+    expect(() => new Headers({ Authorization: authorization! })).not.toThrow()
+  }
+  // The ordinary comma-and-space pool is unchanged by the multiline handling.
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer aiml-first-key, aiml-second-key' },
+      AIMLAPI_MCP_URL,
+    ).Authorization,
+  ).toBe('Bearer aiml-first-key')
+  // Other hosts still keep exactly what they were configured with.
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer first,\nsecond' },
+      'https://mcp.example.test/mcp',
+    ),
+  ).toEqual({ Authorization: 'Bearer first,\nsecond' })
 })
