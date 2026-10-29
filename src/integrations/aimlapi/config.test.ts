@@ -347,3 +347,37 @@ test('MCP Authorization keeps only the first key of a pooled credential', () => 
     ),
   ).toEqual({ Authorization: 'Bearer first, second' })
 })
+
+test('MCP Authorization reduces a line-broken pool to one header-safe key', () => {
+  // An expanded `Bearer ${AIMLAPI_API_KEY}` keeps whatever whitespace the pool
+  // was written with. firstUsableCredential accepts these pools, so the MCP
+  // header must reduce them too instead of handing Headers a line break.
+  for (const pool of [
+    'aiml-first-key,\naiml-second-key',
+    'aiml-first-key,\r\naiml-second-key',
+    'aiml-first-key\n, aiml-second-key',
+    ',\naiml-first-key, aiml-second-key',
+    '\r\n,aiml-first-key,\r\naiml-second-key',
+  ]) {
+    const authorization = resolveAimlapiMcpHeaders(
+      { Authorization: `Bearer ${pool}` },
+      AIMLAPI_MCP_URL,
+    ).Authorization
+    expect(authorization).toBe('Bearer aiml-first-key')
+    expect(() => new Headers({ Authorization: authorization! })).not.toThrow()
+  }
+  // The ordinary comma-and-space pool is unchanged by the multiline handling.
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer aiml-first-key, aiml-second-key' },
+      AIMLAPI_MCP_URL,
+    ).Authorization,
+  ).toBe('Bearer aiml-first-key')
+  // Other hosts still keep exactly what they were configured with.
+  expect(
+    resolveAimlapiMcpHeaders(
+      { Authorization: 'Bearer first,\nsecond' },
+      'https://mcp.example.test/mcp',
+    ),
+  ).toEqual({ Authorization: 'Bearer first,\nsecond' })
+})
