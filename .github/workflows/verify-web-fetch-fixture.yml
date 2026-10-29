@@ -1,0 +1,52 @@
+name: Verify WebFetch backend fixture
+
+on:
+  push:
+    branches:
+      - ci/verify-web-fetch-fixture
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: Before/after boundary and proxy-profile matrix
+        run: |
+          set +e +o pipefail -u
+          F=src/tools/WebFetchTool/WebFetchTool.backend.test.ts
+          S=src/tools/WebFetchTool/zzBoundarySentinel.test.ts
+          BEFORE=311dad746ca4ecb60ef2e47e639448bd76f1c2a0
+          cat > $S <<'EOF'
+          import { expect, test } from 'bun:test'
+          test('a later file gets the real queryHaiku and the caller env', async () => {
+            const { queryHaiku } = await import('../../services/api/claude.js')
+            expect('mock' in queryHaiku).toBe(false)
+            for (const key of ['CLAUDE_CODE_PROVIDER_ROUTE_ID', 'OPENAI_BASE_URL', 'OPENAI_API_BASE']) {
+              expect(process.env[key]).toBe(process.env[`EXPECT_${key}`])
+            }
+          })
+          EOF
+          run() { echo "== $1"; shift; env "$@" bun test ./$F ./$S 2>&1 | grep -E '^\(fail\)|^\(pass\)| pass$| fail$|^Ran '; }
+          matrix() {
+            run "canonical"
+            run "primary proxy" CLAUDE_CODE_PROVIDER_ROUTE_ID=aimlapi OPENAI_BASE_URL=https://proxy.example/v1 EXPECT_CLAUDE_CODE_PROVIDER_ROUTE_ID=aimlapi EXPECT_OPENAI_BASE_URL=https://proxy.example/v1
+            run "alias-only proxy" CLAUDE_CODE_PROVIDER_ROUTE_ID=aimlapi OPENAI_API_BASE=https://proxy.example/v1 EXPECT_CLAUDE_CODE_PROVIDER_ROUTE_ID=aimlapi EXPECT_OPENAI_API_BASE=https://proxy.example/v1
+          }
+          echo "### BEFORE ${BEFORE:0:7}"; git show $BEFORE:$F > $F; matrix
+          git checkout -q -- $F
+          echo "### AFTER $(git log -1 --format=%h -- $F)"; matrix
+          echo "### sentinel alone"; bun test ./$S 2>&1 | grep -E ' pass$| fail$'
+          rm -f $S
+      - name: Related suites
+        run: bun test ./src/tools/WebFetchTool ./src/utils/envFile.test.ts ./src/integrations/aimlapi
+      - name: Typecheck and any budget
+        run: bun run typecheck:fast && bun run typecheck:type-tests && bun run lint:any-budget
