@@ -9,6 +9,16 @@ import {
 import { asMockFetch } from '../../test/typedMocks.js'
 import { createAssistantMessage } from '../../utils/messages/factories.js'
 
+// WebFetch hands scraped markdown to the secondary model. Each test routes
+// queryHaiku to this stub through a spy, which mock.restore() removes, so the
+// tests exercise only backend selection and later test files get the real
+// queryHaiku. Calls are counted on the stub: when an earlier file left
+// claude.js module-mocked, the spy reuses that mock and its call history.
+const haikuStub = mock(async ({ userPrompt }: { userPrompt: string }) =>
+  createAssistantMessage({
+    content: `summary of: ${userPrompt.includes('# Scraped page') ? 'scraped page' : 'other'}`,
+  }),
+)
 const fetchMock = mock()
 const originalFetch = globalThis.fetch
 // The route and both base-URL spellings decide whether AIMLAPI_API_KEY may be
@@ -28,14 +38,8 @@ let restoreEnv: (() => void) | undefined
 beforeEach(async () => {
   await acquireSharedMutationLock('tools/WebFetchTool/WebFetchTool.backend.test.ts')
   restoreEnv = snapshotEnv(ENV_KEYS, { clear: true })
-  // WebFetch hands scraped markdown to the secondary model. Stub it with a
-  // spy, which mock.restore() removes, so the test exercises only backend
-  // selection and later test files still get the real queryHaiku.
-  spyOn(claudeApi, 'queryHaiku').mockImplementation(async ({ userPrompt }) =>
-    createAssistantMessage({
-      content: `summary of: ${userPrompt.includes('# Scraped page') ? 'scraped page' : 'other'}`,
-    }),
-  )
+  haikuStub.mockClear()
+  spyOn(claudeApi, 'queryHaiku').mockImplementation(haikuStub)
   fetchMock.mockReset()
   fetchMock.mockImplementation(async (input: unknown) => {
     const host = new URL(String(input)).hostname
@@ -124,5 +128,5 @@ test('an AI/ML API failure is reported, not retried through another backend', as
 
   await expect(runWebFetch()).rejects.toThrow('The provider answered HTTP 400.')
   expect(requestedHosts()).toEqual(['tools.aimlapi.com'])
-  expect(claudeApi.queryHaiku).not.toHaveBeenCalled()
+  expect(haikuStub).not.toHaveBeenCalled()
 })
