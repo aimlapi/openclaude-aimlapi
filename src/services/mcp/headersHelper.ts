@@ -1,5 +1,8 @@
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
-import { resolveAimlapiMcpHeaders } from '../../integrations/aimlapi/config.js'
+import {
+  assertAimlapiMcpBuiltinCredential,
+  resolveAimlapiMcpHeaders,
+} from '../../integrations/aimlapi/config.js'
 import { checkHasTrustDialogAccepted } from '../../utils/config.js'
 import { logAntError } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -126,8 +129,15 @@ export async function getMcpHeadersFromHelper(
  */
 export async function getMcpServerHeaders(
   serverName: string,
-  config: McpSSEServerConfig | McpHTTPServerConfig | McpWebSocketServerConfig,
+  config: (
+    | McpSSEServerConfig
+    | McpHTTPServerConfig
+    | McpWebSocketServerConfig
+  ) & { pluginSource?: string },
 ): Promise<Record<string, string>> {
+  // The built-in aimlapi plugin's server authenticates with AIMLAPI_API_KEY;
+  // recheck the live session before its headers are used to connect.
+  assertAimlapiMcpBuiltinCredential(config.pluginSource)
   const staticHeaders = config.headers || {}
   const dynamicHeaders =
     (await getMcpHeadersFromHelper(serverName, config)) || {}
